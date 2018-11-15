@@ -3,7 +3,7 @@
  * 
  * \author Alex "A-drizzle"  Rainville
  * \date 11/10/2018
- * \version 1.1 modified to use fftw malloc
+ * \version 1.2 fixed fftw_complex indexing and transfer function algorithm
  * \note All units mks unless noted in program
  * \par
  * loading module on flux: -bash-4.2$ module load fftw/3.3.4/gcc/4.8.5
@@ -24,7 +24,7 @@
  #include <fstream>
  #include <chrono>
 //number of points in FFTW vector. Needs to be power of two.
- #define NUMPOINTS 16384
+ #define NUMPOINTS 1024
 
 
 
@@ -57,13 +57,78 @@ void toFile(fftw_complex* a, int N, std::string filename ){
 	std::ofstream myfile (filename);
 	if(myfile.is_open()){
 		for(int i=0;i<N;i++){
-			myfile << std::to_string(a[0][i]) << "," << std::to_string(a[1][i]) << "\n";;
+			myfile << a[i][0] << "," << a[i][1] << "\n";;
 		}
 
 	}else std::cout << "cannot open file"<< std::endl;
 
 
 	myfile.close();
+}
+/**
+ * @brief Does a convolution with for loops
+ * @details [long description]
+ * 
+ * @param a [description]
+ * @param b [description]
+ * @param c [description]
+ * @param N [description]
+ */
+void convolve(fftw_complex* a, fftw_complex *b, fftw_complex *c, int N){
+	double d,e,f,g,k,l,m,n;
+	for(int j=1;j<N;j++){
+		double imagSumFor =0.0;
+		double realSumFor =0.0;
+		double imagSumBack =0.0;
+		double realSumBack =0.0;
+		int indy;
+		for(int i=0;i<j;i++){
+			indy = N-j+i;
+			d = a[i][0];
+			e = a[i][1];
+			f = b[indy][0];
+			g = b[indy][1];
+
+			k = a[indy][0];
+			l = a[indy][1];
+			m = b[i][0];
+			n = b[i][1];
+			realSumFor += d*f-e*g;
+			imagSumFor += d*g+e*f;
+
+			realSumBack += k*m - l*n;
+			imagSumBack += k*n + l*m;
+		}
+		c[j][0] = realSumFor;
+		c[j][1] = imagSumFor;
+		c[N-j][0] = realSumBack;
+		c[N-j][1] = imagSumBack;
+	}
+	
+	double realSum = 0.0;
+	double imagSum = 0.0;
+	for(int i=0;i<N;i++){
+		d = a[i][0];
+		e = a[i][1];
+		f = b[i][0];
+		g = b[i][1];
+		realSum +=d*f - e*g;
+		imagSum += d*g + e*f;
+	}
+	c[N/2-1][0] = realSum;
+	c[N/2-1][1] = imagSum;
+	
+}
+
+void reAlign(fftw_complex *a, fftw_complex *b, int N){
+	for(int i=0;i<N/2;i++){
+		b[i][0] = a[i+N/2][0];
+		b[i][1] = a[i+N/2][1];
+	}
+	for(int i=N/2;i<N;i++){
+		b[i][0] = a[i-N/2][0];
+		b[i][1] = a[i-N/2][1];
+	}
 }
 
 /*
@@ -89,6 +154,7 @@ class stacker{
 		static int number;
 		static std::complex<double> F[NUMPOINTS];
 		fftw_complex *toReturn;
+		fftw_complex *conjToReturn;
 		//static double tabulatedCos[NUMPOINTS];
 		//static double tabulatedSin[NUMPOINTS];
 	public:
@@ -107,6 +173,7 @@ class stacker{
 		double getDelta(){return delta;}
 		//returns a pointer to the head of the overallF array
 		fftw_complex* getF();
+		fftw_complex* getConjF();
 
 		//setters (do not allow for setting of stacker ID, stacker numbers)
 		void setTr(double Tr){this->Tr=Tr;}
@@ -143,14 +210,27 @@ stacker::stacker(double Tr, double delta, double R, double alpha){
 
 
 stacker::~stacker(){
-	fftw_free(toReturn);
+	//when the last stacker is destroyed remove the fftw_complex arrays
+	if(stackerID==1){
+		fftw_free(toReturn);
+		fftw_free(conjToReturn);
+	}
 }
 
 fftw_complex* stacker::getF(){
 		toReturn  = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*NUMPOINTS);
 		for(int i=0;i<NUMPOINTS;i++){
-			toReturn[0][i] = real(F[i]);
-			toReturn[1][i] = imag(F[i]);
+			toReturn[i][0] = real(F[i]);
+			toReturn[i][1] = imag(F[i]);
+		}
+	return toReturn;
+}
+
+fftw_complex* stacker::getConjF(){
+		toReturn  = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*NUMPOINTS);
+		for(int i=0;i<NUMPOINTS;i++){
+			toReturn[i][0] = -1.0*imag(F[i]);
+			toReturn[i][1] = real(F[i]);
 		}
 	return toReturn;
 }
@@ -172,7 +252,7 @@ void stacker::updateF(){
 		//std::cout << "called first stacker, assigning values to overallF" <<std::endl;
 
 		for(int i=0;i<NUMPOINTS;i++){
-			deltaL = 2*M_PI*(x[i] +delta);
+			deltaL = 2*M_PI*Tr*(x[i] +delta);
 			expVal = std::exp(I*deltaL);
 			F[i] = (r-expVal)/(1.0-r*expVal);
 		}
@@ -180,9 +260,9 @@ void stacker::updateF(){
 	else{
 		//std::cout << "called a n>1 stacker, updating overall F" <<std::endl;
 		for(int i=0;i<NUMPOINTS;i++){
-			deltaL = 2*M_PI*(x[i] +delta);
+			deltaL = 2*M_PI*Tr*(x[i] +delta);
 			expVal = std::exp(I*deltaL);
-			F[i] = (r-expVal)/(1.0-r*expVal);
+			F[i] = (r-expVal)/(1.0-r*expVal)*F[i];
 		}
 	}
 }
@@ -218,30 +298,110 @@ std::string stacker::toString(){
  	stacker sixth (Tr2, delta,R,alpha);
  	stacker seventh (Tr2, delta,R,alpha);
  	stacker eighth (Tr2, delta,R,alpha);
- 	std::cout<<eighth.toString() <<std::endl;
- 	std::cout<<first.toString() <<std::endl;
+ 	//std::cout<<eighth.toString() <<std::endl;
+ 	//std::cout<<first.toString() <<std::endl;
 
  	//std::cout << first.getTr() <<std::endl;
  	//first.setTr(0.50);
 
- 	std::complex<double> out[NUMPOINTS] = {};
+ 	fftw_complex *out, *alignedOut;
+ 	out = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*NUMPOINTS);
+ 	alignedOut = fftw_alloc_complex(NUMPOINTS);
  	fftw_plan p;
  	p = fftw_plan_dft_1d(NUMPOINTS,
- 						reinterpret_cast<fftw_complex*>(eighth.getF()), 
- 						reinterpret_cast<fftw_complex*>(out), 
+ 						eighth.getConjF(),
+ 						out, 
  						FFTW_BACKWARD, 
  						FFTW_ESTIMATE);
  	fftw_execute(p);
- 	fftw_print_plan(p) ;
- 	fftw_destroy_plan(p);
+ 	//fftw_print_plan(p) ;
+ 
+ 	std::cout<<std::endl;
 
  	/*
  	for(int i=0;i<5;i++){
  		std::cout<< out[i] <<std::endl;
  	}
  	*/
- 	//toFile(out, NUMPOINTS, "test.txt");
+ 	reAlign(out, alignedOut, NUMPOINTS);
+ 	toFile(alignedOut, NUMPOINTS, "test.txt");
+
+ 	//fftw_complex
+
+ 	//create a imput fftw complex that is an impulse at 0
+ //	fftw_complex *impulse;
+ 	//fftw_complex *ftImpulse;
+ 	//impulse = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*NUMPOINTS);
+ //	impulse = fftw_alloc_complex(NUMPOINTS);
 
 
+ 	//ftImpulse = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*NUMPOINTS*2);
+
+
+// 	for(int i=0;i<NUMPOINTS;i++){
+// 		impulse[i][0] = 0;
+// 		impulse[i][1] = 0;
+ //	}
+ //	impulse[NUMPOINTS/2-1][0] = 1;
+ 	//impulse[1][NUMPOINTS/2-3] = 0;
+ 	//std::cout<< &out[NUMPOINTS/2-3][0] <<std::endl;
+ 	//std::cout<< &out[NUMPOINTS/2-3][1] <<std::endl;
+ 	//std::cout<< &out[NUMPOINTS/2-1][0] <<std::endl;
+ 	//impulse[0][NUMPOINTS/2 +1] = 1;
+ 	//impulse[0][NUMPOINTS/2 +2] = 1;
+ //	fftw_complex *convTest;
+ 	//convTest = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*2*NUMPOINTS);
+ //	convolve(impulse, impulse, convTest, NUMPOINTS);
+ //	toFile(convTest,NUMPOINTS, "test.txt");
+
+/*
+ 	//FT the impulse response
+ 	fftw_plan pp;
+ 	pp = fftw_plan_dft_1d(NUMPOINTS,
+ 					impulse,
+ 					ftImpulse, 
+ 					FFTW_FORWARD, 
+ 					FFTW_ESTIMATE); 
+ 	fftw_execute(pp);
+ 	toFile(ftImpulse,NUMPOINTS, "test.txt");
+ 	std::cout<<"If we made it here its fine" <<std::endl;
+ 	*/
+/*
+
+//multiply the FTd impulse response by the transfer fucntion
+ 	fftw_complex *f;
+ 	f = first.getF();
+
+ 	double a,b,c,d;
+ 	for(int i=0;i<NUMPOINTS;i++){
+ 		a = f[0][i];
+ 		b = f[1][i];
+ 		c = ftImpulse[0][i];
+ 		d = ftImpulse[1][i];
+ 		ftImpulse[0][i] = a*b-c*d;
+ 		ftImpulse[1][i] = d*a+b*d;
+ 	}
+//FT back
+
+ 	fftw_plan ppp;
+ 	ppp = fftw_plan_dft_1d(NUMPOINTS,
+ 					ftImpulse,
+ 					impulse, 
+ 					FFTW_BACKWARD, 
+ 					FFTW_ESTIMATE); 
+ 	fftw_execute(ppp);
+ 	toFile(impulse,NUMPOINTS,"test.txt");
+ 	std::cout<<"If we made it here its fine" <<std::endl;
+
+
+ 	//fftw_destroy_plan(p);
+ 	//fftw_free(out);
+
+*/
  	return 0;
+ 	//fftw_free(convTest);
+ 	//fftw_free(impulse);
+ //	fftw_free(ftImpulse);
+ 	fftw_free(out);
+ 	fftw_free(alignedOut);
  }
