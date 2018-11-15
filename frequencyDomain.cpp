@@ -3,7 +3,7 @@
  * 
  * \author Alex "A-drizzle"  Rainville
  * \date 11/10/2018
- * \version Initial
+ * \version 1.1 modified to use fftw malloc
  * \note All units mks unless noted in program
  * \par
  * loading module on flux: -bash-4.2$ module load fftw/3.3.4/gcc/4.8.5
@@ -15,12 +15,12 @@
 
  #include <cstdio>
 
- #include <vector>
+ //#include <vector>
  #include <iostream>
- #include <fftw3.h>
  #include <cmath>
  #include <string>
  #include <complex>
+ #include <fftw3.h>
  #include <fstream>
  #include <chrono>
 //number of points in FFTW vector. Needs to be power of two.
@@ -52,20 +52,12 @@ void linspace(int a, int b, int points, double* x){
 }
 
 
-/**
- * @brief [brief description]
- * @details [long description]
- * 
- * @param a [description]
- * @param N [description]
- * @param filename [description]
- */
-void toFile(std::complex<double>* a, int N, std::string filename ){
+
+void toFile(fftw_complex* a, int N, std::string filename ){
 	std::ofstream myfile (filename);
 	if(myfile.is_open()){
 		for(int i=0;i<N;i++){
-			myfile << std::to_string(real(*a)) << "," << std::to_string(imag(*a)) << "\n";;
-			a++;
+			myfile << std::to_string(a[0][i]) << "," << std::to_string(a[1][i]) << "\n";;
 		}
 
 	}else std::cout << "cannot open file"<< std::endl;
@@ -92,11 +84,11 @@ class stacker{
 		double delta; //cavity phase
 		double R; //cavity reflectivity (power)
 		double alpha; //cavity absorption, in [1/cm]
-		std::complex<double> F[NUMPOINTS]; //create a pointer to the head of the FFTW array
 		int stackerID;
 		static double x[NUMPOINTS]; //linear vector from 0 to 1 
 		static int number;
-		static std::complex<double> overallF[NUMPOINTS];
+		static std::complex<double> F[NUMPOINTS];
+		fftw_complex *toReturn;
 		//static double tabulatedCos[NUMPOINTS];
 		//static double tabulatedSin[NUMPOINTS];
 	public:
@@ -114,8 +106,7 @@ class stacker{
 		double getAlpha(){return alpha;}
 		double getDelta(){return delta;}
 		//returns a pointer to the head of the overallF array
-		std::complex<double>* getoverallF(){return overallF;}
-		std::complex<double>* getF(){return F;}
+		fftw_complex* getF();
 
 		//setters (do not allow for setting of stacker ID, stacker numbers)
 		void setTr(double Tr){this->Tr=Tr;}
@@ -124,14 +115,8 @@ class stacker{
 		void setDelta(double delta){this->delta=delta;}
 
 
-		//method to calculate the F(w) array
-		void calcF();
-
 		//method to update the overall F(w) array.
-		void updateOverallF();
-
-		//method that runs both updates for me
-		void update(){calcF(); updateOverallF();};
+		void updateF();
 
 		//tostring method
 		std::string toString();
@@ -141,7 +126,7 @@ class stacker{
 
 int stacker::number = 0;
 double stacker::x[] ={};
-std::complex<double> stacker::overallF[NUMPOINTS] = {};
+std::complex<double> stacker::F[NUMPOINTS] = {};
 
 stacker::stacker(double Tr, double delta, double R, double alpha){
 	this -> Tr = Tr;
@@ -150,48 +135,54 @@ stacker::stacker(double Tr, double delta, double R, double alpha){
 	this -> alpha = alpha;
 	number++;
 	stackerID = number;
-	std::cout << number << " " <<stackerID << std::endl;
+	//std::cout << number << " " <<stackerID << std::endl;
 	if(stackerID==1) linspace(0,1,NUMPOINTS,x);
-	update();
+	updateF();
 }
 
 
 
 stacker::~stacker(){
+	fftw_free(toReturn);
 }
 
-/**
- * @brief Calculates the impulse response
- * @details [long description]
- */
-void stacker::calcF(){
-	std::complex<double> r(std::sqrt(R),0.0);
-	std::complex<double> I(0.0,1.0);
-	std::complex<double> deltaL;
-	std::complex<double> expVal;
-	for(int i=0;i<NUMPOINTS;i++){
-		deltaL = 2*M_PI*(x[i] +delta);
-		expVal = std::exp(I*deltaL);
-		F[i] = (r-expVal)/(1.0-r*expVal);
-	}
+fftw_complex* stacker::getF(){
+		toReturn  = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*NUMPOINTS);
+		for(int i=0;i<NUMPOINTS;i++){
+			toReturn[0][i] = real(F[i]);
+			toReturn[1][i] = imag(F[i]);
+		}
+	return toReturn;
 }
+
+
+
 /**
  * @brief Calculates overall transfer function
  * @details If the stacker is the first one, then memory copys F into overallF. 
  * Else it will multiply the current overallF by the current F to update. 
  */
-void stacker::updateOverallF(){
+void stacker::updateF(){
+	std::complex<double> r(std::sqrt(R),0.0);
+	std::complex<double> I(0.0,1.0);
+	std::complex<double> deltaL;
+	std::complex<double> expVal;
+
 	if(stackerID==1){
-		std::cout << "called first stacker, assigning values to overallF" <<std::endl;
+		//std::cout << "called first stacker, assigning values to overallF" <<std::endl;
 
 		for(int i=0;i<NUMPOINTS;i++){
-			overallF[i] = F[i];
+			deltaL = 2*M_PI*(x[i] +delta);
+			expVal = std::exp(I*deltaL);
+			F[i] = (r-expVal)/(1.0-r*expVal);
 		}
 	} 
 	else{
-		std::cout << "called a n>1 stacker, updating overall F" <<std::endl;
+		//std::cout << "called a n>1 stacker, updating overall F" <<std::endl;
 		for(int i=0;i<NUMPOINTS;i++){
-			overallF[i] = overallF[i]*F[i];
+			deltaL = 2*M_PI*(x[i] +delta);
+			expVal = std::exp(I*deltaL);
+			F[i] = (r-expVal)/(1.0-r*expVal);
 		}
 	}
 }
@@ -228,6 +219,7 @@ std::string stacker::toString(){
  	stacker seventh (Tr2, delta,R,alpha);
  	stacker eighth (Tr2, delta,R,alpha);
  	std::cout<<eighth.toString() <<std::endl;
+ 	std::cout<<first.toString() <<std::endl;
 
  	//std::cout << first.getTr() <<std::endl;
  	//first.setTr(0.50);
@@ -235,11 +227,12 @@ std::string stacker::toString(){
  	std::complex<double> out[NUMPOINTS] = {};
  	fftw_plan p;
  	p = fftw_plan_dft_1d(NUMPOINTS,
- 						reinterpret_cast<fftw_complex*>(eighth.getoverallF()), 
+ 						reinterpret_cast<fftw_complex*>(eighth.getF()), 
  						reinterpret_cast<fftw_complex*>(out), 
  						FFTW_BACKWARD, 
  						FFTW_ESTIMATE);
  	fftw_execute(p);
+ 	fftw_print_plan(p) ;
  	fftw_destroy_plan(p);
 
  	/*
@@ -247,7 +240,7 @@ std::string stacker::toString(){
  		std::cout<< out[i] <<std::endl;
  	}
  	*/
- 	toFile(out, NUMPOINTS, "test.txt");
+ 	//toFile(out, NUMPOINTS, "test.txt");
 
 
  	return 0;
