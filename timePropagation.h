@@ -1,9 +1,5 @@
 #include <vector>
-#include <iostream>
 #include <cmath>
-#include <chrono>
-
-#define INPUT_SIZE 200
 
 using namespace std;
 
@@ -108,16 +104,6 @@ void cavityPropagation(	const vector<cavity> &cavSet, const vector<pulse> &input
 			Ecav[j][i].real = temp;
 		}
 	}
-
-	// for(i=0;i<numPulses;++i){
-	// 	cout << "Iteration i=" << i << endl;
-	// 	for(j=0;j<numCavs;++j){
-	// 		cout << "Cavity " << j << endl;
-	// 		cout << "Eout: " << Eout[j][i].real << ", " << Eout[j][i].imag << endl;
-	// 		cout << "Ecav: " << Ecav[j][i].real << ", " << Ecav[j][i].imag << endl << endl;
-	// 	}
-	// }
-
 	output.swap(Eout[numCavs-1]);
 	return;
 }
