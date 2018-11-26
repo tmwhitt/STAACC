@@ -1,0 +1,41 @@
+This test case simulates the 4+4 stacking profile, of 4 triangular cells and 4 Heriot cells.
+
+Cavity 1:
+Length=1
+Phase=-2.242
+R=0.58
+
+Cavity 2:
+Length=1
+Phase=-3.037
+R=0.58
+
+Cavity 3:
+Length=1
+Phase=2.4895
+R=0.68
+
+Cavity 4:
+Length=1
+Phase=-0.693
+R=0.68
+
+Cavity 5:
+Length=9
+Phase=-2.242
+R=0.58
+
+Cavity 6:
+Length=9
+Phase=-3.037
+R=0.58
+
+Cavity 7:
+Length=9
+Phase=2.4895
+R=0.68
+
+Cavity 8:
+Length=9
+Phase=-0.693
+R=0.68

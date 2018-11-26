@@ -1,0 +1,5 @@
+This test case is a simple triangular cavity
+
+Cavity 1:
+Length = 1
+Phi = 0
