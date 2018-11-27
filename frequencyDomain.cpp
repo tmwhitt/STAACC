@@ -3,7 +3,7 @@
  * 
  * \author Alex "A-drizzle"  Rainville
  * \date 11/16/2018
- * \version 1.2 fixed fftw_complex indexing and transfer function algorithm
+ * \version 1.3 fixed fftw_complex indexing and transfer function algorithm
  * \note All units mks unless noted in program
  * \par
  * loading module on flux: -bash-4.2$ module load fftw/3.3.4/gcc/4.8.5
@@ -26,8 +26,10 @@
  #include <fftw3.h>
  #include <fstream>
  #include <chrono>
+ #include <vector>
 //number of points in FFTW vector. Needs to be power of two.
  #define NUMPOINTS 4096
+ #define PI  3.141592653589793
 
 
 
@@ -136,7 +138,7 @@ void convolve(fftw_complex* a, fftw_complex *b, fftw_complex *c, int N){
 
 /**
  * @brief Re-aligns output fft array
- * @details Takes output fftw_complex array and aligns it from negative to positive frequency. Written using pointers for speed
+ * @details Takes output fftw_complex array and aligns it from negative to positive frequency. Written using pointers for speed. FFTW is 16-byte aligned and requires +=2 to go to the next element in the array. 
  * 
  * @param a Input array to be aligned
  * @param b Output aligned array
@@ -175,6 +177,99 @@ void reAlign(fftw_complex *a, fftw_complex *b, int N){
 		imagIn+=2;
 	}
 }
+
+
+class freqCavity{
+private:
+	fftw_complex *F;
+	int totalNumber =0;
+	std::vector<int> cavity;
+	std::vector<double> R;
+	std::vector<double> Tr;
+	std::vector<double> delta;
+	std::vector<double> alpha;
+	static double x[NUMPOINTS];
+public:
+	freqCavity();
+	~freqCavity();
+	void addCavity(double Tr, double delta, double R, double alpha);
+	fftw_complex* getF(){ return F;}
+	std::string toString();
+
+};
+double freqCavity::x[NUMPOINTS] = {};
+
+freqCavity::freqCavity(){
+
+}
+
+freqCavity::~freqCavity(){
+	R.pop_back();
+	Tr.pop_back();
+	delta.pop_back();
+	alpha.pop_back();
+	cavity.pop_back();
+	totalNumber--;
+	if(totalNumber==0) fftw_free(F);
+}
+
+void freqCavity::addCavity(double Tr, double R,  double delta, double alpha){
+	this -> R.push_back(R);
+	this -> Tr.push_back(Tr);
+	this -> delta.push_back(delta);
+	this -> alpha.push_back(alpha);
+	totalNumber++;
+	cavity.push_back(totalNumber);
+	if(totalNumber==1){
+		linspace(0,1,NUMPOINTS, x);
+		F = fftw_alloc_complex(NUMPOINTS);
+	} 
+
+	//now update the impulse response function
+
+	//start by getting pointers to heads of all the arrays
+	double *realBegin, *imagBegin, *xBegin;
+	realBegin = &F[0][0];
+	imagBegin = &F[0][1];
+	xBegin = &x[0];
+	double r=std::sqrt(R);
+	double deltaL;
+
+	//if this is the first cavity then we have to initialize F
+	if(totalNumber==1){
+		for(int i=0;i<NUMPOINTS;i++){
+			deltaL = 2*PI*(Tr*(*xBegin))+delta;
+			*realBegin = (2*r-std::cos(deltaL)*(1+R))/(1+R);
+			*imagBegin = -std::sin(deltaL)*(1-R)/(1+R);
+			realBegin+=2;
+			imagBegin+=2;
+			xBegin++;
+		}
+	//if it is not the first cavity then we multiply the new F by the old F
+	}else{
+		for(int i=0;i<NUMPOINTS;i++){
+			deltaL = 2*PI*(Tr*(*xBegin))+delta;
+			*realBegin = (*realBegin)*(2*r-std::cos(deltaL)*(1+R))/(1+R);
+			*imagBegin = -1*(*imagBegin)*std::sin(deltaL)*(1-R)/(1+R);
+			realBegin+=2;
+			imagBegin+=2;
+			xBegin++;
+		}
+	}
+}
+
+std::string freqCavity::toString(){
+	using namespace std;
+	string str1 = "Total Number of stackers: " + to_string(totalNumber) + "\n";
+	for(int i=0;i<totalNumber;i++){
+		str1 +=  "stacker " + to_string(i+1) + ": Tr = " + to_string(Tr.at(i)) + 
+				", delta = "  +to_string(delta.at(i)) + 
+				", R = " + to_string(R.at(i)) +
+				", alpha = " + to_string(alpha.at(i)) + "\n";
+	}
+	return str1;
+}
+
 
 class stacker{
 	private:
@@ -230,6 +325,17 @@ std::complex<double> stacker::F[NUMPOINTS] = {};
 bool stacker::gottenF = false;
 bool stacker::gottenConjF = false;
 
+
+/**
+ * @brief Constructor
+ * @details Makes an instance of the class "stacker"
+ * 
+ * @param Tr Round trip, in multiple of oscillator round trip
+ * @param delta Cavity phase [rad]
+ * @param R Cavity input mirror power reflectivity
+ * @param alpha Cavity Loss [1/cm]
+ * 
+ */
 stacker::stacker(double Tr, double delta, double R, double alpha){
 	this -> Tr = Tr;
 	this -> delta = delta;
@@ -243,15 +349,26 @@ stacker::stacker(double Tr, double delta, double R, double alpha){
 }
 
 
-
+/**
+ * @brief Destructor
+ * @details Removes an instance of the cavity. If the cavity is the last one and the toReturn and/or conjToReturn arrays have been initalized the memory will be freed using fftw_free 
+ * @return null
+ */
 stacker::~stacker(){
 	//when the last stacker is destroyed remove the fftw_complex arrays
 	if(stackerID==1){
 		if(gottenF==true) fftw_free(toReturn);
-		else if(gottenConjF == true) fftw_free(conjToReturn);
+		if(gottenConjF == true) fftw_free(conjToReturn);
 	}
 }
 
+/**
+ * @brief Returns the impulse response of the cavity
+ * @details Returns a pointer to the head of a fftw_complex array for the transfer function of the system. 
+ * /par
+ * If the array is not allocated (signified by the gottenF or gottenConjF boolean)  then the function will allocate and fill the array from the static F array. If the array has been allocated, then the function just returns a pointer to the head. 
+ * @return [description]
+ */
 fftw_complex* stacker::getF(){
 	if(gottenF==false){
 		toReturn  = (fftw_complex*) fftw_malloc(sizeof(fftw_complex)*NUMPOINTS);
@@ -333,7 +450,7 @@ std::string stacker::toString(){
 
  int main(int argc, char* argv[]){
 
-
+/*
  	std::chrono::time_point<std::chrono::system_clock> start, end, oStart, oEnd; 
 
  	oStart = std::chrono::system_clock::now();
@@ -357,7 +474,7 @@ std::string stacker::toString(){
  	stacker seventh (Tr2, 2.4895,R2,alpha);
  	stacker eighth (Tr2, -0.693,R2,alpha);
 	*/
-
+/*
  	start = std::chrono::system_clock::now();
  	stacker first   (Tr1, 0.0, 0.5, alpha);
  	end = std::chrono::system_clock::now();
@@ -391,7 +508,7 @@ std::string stacker::toString(){
  	*
  	*********************************************************************************/
  	//create two complex fftw arrays for input and output
- 	fftw_complex *IR, *alignedIR, *Fin;
+ /*	fftw_complex *IR, *alignedIR, *Fin;
  	IR = fftw_alloc_complex(NUMPOINTS);
  	alignedIR = fftw_alloc_complex(NUMPOINTS);
  	Fin = eighth.getConjF();
@@ -422,7 +539,7 @@ std::string stacker::toString(){
 
 	*/
 
-
+/*
  	//align the output from negative to positive frequency
  	start = std::chrono::system_clock::now();
  	reAlign(IR, alignedIR, NUMPOINTS);
@@ -445,111 +562,41 @@ std::string stacker::toString(){
  				<< fftwTime.count() << "," 
  				<< alignTime.count()<< std::endl;
 
- 	for(int i=0;i<10;i++){
- 		std::cout << &IR[i] << "," << &IR[i][1] <<std::endl;
- 	}
-
-
- 	/*********************************************************************************
- 	* Create the burst profile 
- 	*
- 	*Burst called burst, burst FT called burstFT
- 	*
- 	******************************************************************************/
-/*
- 	//create the stacking burst functions with 81 pulses at the center of a NUMPOINTS length array
- 	fftw_complex *burst, *burstFT;
- 	fftw_plan pp;
- 	burst = fftw_alloc_complex(NUMPOINTS);
- 	burstFT = fftw_alloc_complex(NUMPOINTS);
-
- 	//set everything to 0
- 	for(int i=0;i<NUMPOINTS;i++){
- 		burst[i][0] = 0;
- 		burst[i][1] = 0;
- 	}
-
- 	burst[NUMPOINTS/2-1][0] = 1.0;
-/*
- 	//set the middle 81 pulses to equal amplitude no phase
- 	for(int i=0; i<81;i++){
- 		burst[i+NUMPOINTS/2 -81][0] = 1.0;
- 	}
-*/
- 	/*
- 	pp = fftw_plan_dft_1d(NUMPOINTS,
- 						burst,
- 						burstFT,
- 						FFTW_FORWARD,
- 						FFTW_ESTIMATE);
- 	fftw_execute(pp);
- 	fftw_destroy_plan(pp);
- 	//toFile(out,NUMPOINTS, "test.txt");
-
-
- 	/******************************************************************************
- 	*Multiply the burst FT by the frequency domain impulse response of the function
- 	*
- 	*multipled array called "multiplied"
- 	*output array called "output"
- 	*
- 	****************************************************************************/
-/*
- 	fftw_plan ppp;
- 	fftw_complex *multiplied, *output; 
- 	multiplied = fftw_alloc_complex(NUMPOINTS);
- 	output = fftw_alloc_complex(NUMPOINTS);
- 	//fftw_complex *F = first.getConjF();
-/*
- 	for(int i=0;i<NUMPOINTS;i++){
- 		multiplied[i][0] = burst[i][0] * F[i][0];
- 		multiplied[i][1] = burst[i][1] * F[i][1];
- 	}
-*/
- 	/*
- 	ppp = fftw_plan_dft_1d(NUMPOINTS,
- 						multiplied,
- 						output,
- 						FFTW_BACKWARD,
- 						FFTW_ESTIMATE);
-
- 	fftw_execute(ppp);
-
- 	fftw_destroy_plan(ppp);
- 	//toFile(output, NUMPOINTS,"test.txt");
-
-
- 	//create the output convolution array
- 	fftw_complex *conV;
- 	conV = fftw_alloc_complex(2*NUMPOINTS);
-
- 	//convolve 
-
-	start = std::chrono::system_clock::now(); 
- 	convolve(alignedIR, burst, conV, NUMPOINTS);
- 	end = std::chrono::system_clock::now();
-
- 	std::chrono::duration<double> convTime = end - start; 
-	
-
- 	//print to file
-
- 	//toFile(conV, NUMPOINTS*2, "test.txt");
-
- 	
- 	std::chrono::duration<double> overallTime = oEnd-oStart;
-
- 	std::cout<< "NUMPOINTS, Overall Time, Plan Time, FFTW time, Align Time, Convolve Time" <<std::endl;
-
- 	std::cout << NUMPOINTS << ","<< overallTime.count() << "," <<planTime.count() << "," << fftwTime.count() <<"," << alignTime.count() << "," <<convTime.count() << std::endl;
- 	*/
  	
  	fftw_free(IR);
  	fftw_free(alignedIR);
- 	//fftw_free(conV);
- 	//fftw_free(burst);
- 	//fftw_free(multiplied);
- 	//fftw_free(output);
- 	
+
+ 	*/
+ 	freqCavity cav;
+ 	cav.addCavity(1,0.5,0.0,0.0);
+ 	cav.addCavity(1,0.5,0.0,0.0);
+ 	cav.addCavity(1, 0.5,0.0, 0.0);
+ 	cav.addCavity(1,0.5, 0.0, 0.0);
+ 	cav.addCavity(9,0.5,0.0,0.0);
+ 	cav.addCavity(9,0.5,0.0,0.0);
+	cav.addCavity(9,0.5,0.0,0.0);
+ 	cav.addCavity(9,0.5,0.0,0.0);
+ 	std::cout << cav.toString()<<std::endl;
+
+  	fftw_complex *IR, *alignedIR, *Fin;
+ 	IR = fftw_alloc_complex(NUMPOINTS);
+ 	alignedIR = fftw_alloc_complex(NUMPOINTS);
+ 	Fin = cav.getF();
+
+ 	//allocate the fftw plan and calculate it 
+ 	fftw_plan p;
+ 	p = fftw_plan_dft_1d(NUMPOINTS,
+ 						Fin,
+ 						IR, 
+ 						FFTW_BACKWARD, 
+ 						FFTW_ESTIMATE);
+
+ 	fftw_execute(p);
+ 	reAlign(IR, alignedIR, NUMPOINTS);
+ 	toFile(IR, NUMPOINTS, "test.txt");
+
+ 	fftw_free(IR);
+ 	fftw_free(alignedIR);
+
  	return 0;
  }
