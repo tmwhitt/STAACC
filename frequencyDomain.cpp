@@ -56,7 +56,15 @@ void linspace(int a, int b, int points, double* x){
 		x++;
 	}
 }
-
+/**
+ * @brief Mutliplies two fftw_complex arrays
+ * @details Multiplies one complex fftw array by the other and stores in another array. All arrays must be the same length. 
+ * 
+ * @param a first array to be multiplied
+ * @param b second array to be multiplied
+ * @param c output array
+ * @param N length of the arrays
+ */
 void vecMult(fftw_complex *a, fftw_complex *b, fftw_complex *c, int N){
 	double *aReal, *aImag, *bReal, *bImag, *cReal, *cImag;
 
@@ -80,6 +88,13 @@ void vecMult(fftw_complex *a, fftw_complex *b, fftw_complex *c, int N){
 	}
 }
 
+/**
+ * @brief Complex conjuages of a fftw_complex array
+ * @details [long description]
+ * 
+ * @param a array to be conjuagted
+ * @param N length of array.
+ */
 void conj(fftw_complex *a, int N){
 	double *aImag;
 	for(int i=0;i<N;i++){
@@ -363,58 +378,10 @@ std::string freqCavity::toString(){
  	//now wind holds the aligned IFFT'd multiplied function
  	toFile(wind, NUMPOINTS, "test.txt");
 
-/*
-
-//////////////////Generate forward fft plan, shift and do it /////////////////////
-
-	fftShift(wind, Fin, NUMPOINTS);
- 	pp = fftw_plan_dft_1d(NUMPOINTS,
- 						  Fin, 
- 						  ftWind,
- 						  FFTW_FORWARD, 
- 						  FFTW_ESTIMATE);
-
- 	fftw_execute(pp);
-//////////////////////now multiple F(w) and transformed burst//////////////////
-
-
- 	vecMult(ftWind, cav.getF(), Fin, NUMPOINTS);
-
- 	fftw_execute(p);
-
- 	fftShift(Fout, aligned, NUMPOINTS);
-
- 	toFile(aligned,NUMPOINTS, "test.txt");
- 	/*
-
-  ///////////////////////////convolution testing//////////////////////////////
-
-  	fftw_complex *toConv, *conv;
-
-  	toConv = fftw_alloc_complex(NUMPOINTS);
-  	conv =   fftw_alloc_complex(NUMPOINTS*2);
-
-  	for(int i=0;i<NUMPOINTS;i++){
-  		toConv[i][0] = 0;
-  		toConv[i][1] = 0;
-  	}
-  	double r = sqrt(0.5);
-  	toConv[NUMPOINTS/2-3][0] = r;
-  	toConv[NUMPOINTS/2-3][1] = 0.0;
-
-  	toConv[NUMPOINTS/2-2][0] = 0.0;
-  	toConv[NUMPOINTS/2-2][1] = -r*r;
-
-  	toConv[NUMPOINTS/2-1][0] = 0.0;
-  	toConv[NUMPOINTS/2-1][1] = -r*r*r;
-
-  	toConv[NUMPOINTS/2][0] = 0.0;
-  	toConv[NUMPOINTS/2][1] = -r*r*r*r;
-
-
-  //	convolve(Fin, toConv, conv, NUMPOINTS);
-  //	toFile(conv, NUMPOINTS*2, "test.txt");
-  */
-
+ 	fftw_free(wind);
+ 	fftw_free(fIn);
+ 	fftw_free(fOut);
+ 	fftw_free(bIn);
+ 	fftw_free(bOut);
  	return 0;
  }
