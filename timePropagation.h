@@ -11,6 +11,8 @@ struct cavity{
 	double phaseReal;
 	double phaseImag;
 
+	cavity() : length(0), refl(1.0), phaseReal(0), phaseImag(0) {}
+
 	cavity(int l, double r, double p) : length(l){
 		refl = sqrt(r);
 		trans = sqrt(1-r);
@@ -18,7 +20,7 @@ struct cavity{
 		phaseImag = sin(p);
 	}
 
-	setCavPhase(double p){
+	void setCavPhase(double p){
 		phaseReal = cos(p);
 		phaseImag = sin(p);
 	}
