@@ -28,7 +28,6 @@
  #include <complex>
  #include <fftw3.h>
  #include <fstream>
- #include <chrono>
  #include <vector>
 //number of points in FFTW vector. Needs to be power of two.
  #define NUMPOINTS 4096
@@ -180,11 +179,13 @@ private:
 	std::vector<double> alpha; /*!vector of alpha for each stacker*/
 	static double x[NUMPOINTS]; /*! static x vector shared by all cavities*/
 	static int totalFreqCavity; /*! integer total number of stacker systems*/
+	bool gottenF = false;
 public:
 	freqCavity();
 	~freqCavity();
 	void addStacker(double Tr, double delta, double R, double alpha);
-	fftw_complex* getF(){ return F;}
+	void fillF(fftw_complex *a, int n);
+	fftw_complex* getF();
 	std::string toString();
 	double* getX(){return x;}
 
@@ -208,72 +209,93 @@ freqCavity::freqCavity(){
  */
 freqCavity::~freqCavity(){
 	totalFreqCavity--;
-	if(totalNumber > 0) fftw_free(F);
+	if(gottenF ==true) fftw_free(F);
 }
 
 /**
- * @brief Adds a stacker to the freqCavity instance
- * @details Adds the stacker values to the vectors. If this is the first stacker added then allocate the F array and fill it. If there is already one or more stackers, then multiply the current F array by the new impulse response. 
- * /par
- * /note The F updating loops use pointer indexing for speed. The fftw_complex array is 16-byte alinged and we use a double pointer for it so the pointer needs to be increased by two. 
+ * @brief Fills input array with transfer function of cavity System
+ * @details Takes input array a. If the freqCavity instance already has calculated F for itself, then just copy that into a. If not, we have to calculate and fill a. 
  * 
- * /todo Fix the slow implementation of the exponential in the F calculation.
- * 
- * @param Tr Round-trip time
- * @param R Power reflectivity
- * @param delta Phase
- * @param alpha loss
+ * @param a pointer to head of fftw_complex array.
+ * @param n length of fftw_complex array a
  */
+void freqCavity::fillF(fftw_complex *a, int n){
+	double *aReal, *aImag, *xBegin;
+	aReal = &a[0][0];
+	aImag = &a[0][1];
+	std::cout<<aReal<<std::endl;
+
+	//if the instance of the class already has calculated the array then just fill a from that array.
+	if(gottenF==true){
+		double *bReal,*bImag;
+		bReal = &F[0][0];
+		bImag = &F[0][1];
+		for(int i=0;i<n;i++){
+			*aReal = *bReal;
+			*aImag = *bImag;
+			bReal +=2;
+			bImag +=2;
+			aReal +=2;
+			aImag +=2;
+		}
+	//otherwise calculate and fill a
+	}else{
+		xBegin = &x[0];
+		double r = std::sqrt(R[0]);
+
+		//for the first stacker just initialize the array values	
+		for(int i=0;i<n;i++){
+			double deltaL = 2.0*PI*(Tr[0]*(*xBegin))+delta[0];
+			*aReal = (2.0*r-cos(deltaL)*(1.0+R[0]))/(1.0+R[0]-2.0*r*cos(deltaL));
+			*aImag = -1.0*sin(deltaL)*(1.0-R[0])/(1.0+R[0]-2.0*r*cos(deltaL));
+	
+			xBegin++;
+			aReal+=2;
+			aImag+=2;
+		}
+
+		//then for each subsequent stacker multiply the current array value by the value for this stacker
+		for(int i=1; i<totalNumber;i++){
+			aReal = &a[0][0];
+			aImag = &a[0][1];
+			xBegin = &x[0];
+			double r = std::sqrt(R[i]);
+			for(int j=0;j<n;j++){
+
+				double deltaL = 2.0*PI*(Tr[i]*(*xBegin))+delta[i];
+				double realTemp = (2.0*r-cos(deltaL)*(1.0+R[i]))/(1.0+R[i]-2.0*r*cos(deltaL));
+				double imagTemp =  -1.0*sin(deltaL)*(1.0-R[i])/(1.0+R[i]-2.0*r*cos(deltaL));
+				double aRealTemp = *aReal;
+				double aImagTemp = *aImag;
+
+				*aReal = aRealTemp*realTemp - aImagTemp*imagTemp;
+				*aImag = aRealTemp*imagTemp + aImagTemp*realTemp;
+
+				xBegin++;
+				aReal+=2;
+				aImag+=2;
+			}
+		}
+	}
+}
+
+
 void freqCavity::addStacker(double Tr, double R,  double delta, double alpha){
-	//std::cout<<"adding cavity"<<std::endl;
 	this -> R.push_back(R);
 	this -> Tr.push_back(Tr);
 	this -> delta.push_back(delta);
 	this -> alpha.push_back(alpha);
 	totalNumber++;
 	cavity.push_back(totalNumber);
-	if(totalNumber==1) 	F = fftw_alloc_complex(NUMPOINTS);
+}
 
-	//now update the impulse response function
-
-	//start by getting pointers to heads of all the arrays
-	double *realBegin, *imagBegin, *xBegin;
-	realBegin = &F[0][0];
-	imagBegin = &F[0][1];
-	xBegin = &x[0];
-	double r=std::sqrt(R);
-	double deltaL;
-	double test;
-
-	//if this is the first cavity then we have to initialize F
-	if(totalNumber==1){
-		for(int i=0;i<NUMPOINTS;i++){
-			deltaL = 2.0*PI*(Tr*(*xBegin))+delta;
-			*realBegin = (2.0*r-cos(deltaL)*(1.0+R))/(1.0+R-2.0*r*cos(deltaL));
-			*imagBegin = -1.0*sin(deltaL)*(1.0-R)/(1.0+R-2.0*r*cos(deltaL));
-			realBegin+=2;
-			imagBegin+=2;
-			xBegin++;
-		}
-	//if it is not the first cavity then we multiply the new F by the old F
-	}else{
-		double realVal, imagVal;
-		std::complex<double> I(0,1);
-		std::complex<double> temp, temp2, expVal;
-
-		for(int i=0;i<NUMPOINTS;i++){
-
-			temp2 = {*realBegin, *imagBegin};
-			deltaL = 2.0*PI*(Tr*(*xBegin))+delta;
-			expVal = std::exp(I*deltaL);
-			temp = (r-expVal)/(1.0-r*expVal) * temp2;
-
-			*realBegin = temp.real();
-			*imagBegin = temp.imag();
-			realBegin+=2;
-			imagBegin+=2;
-			xBegin++;
-		}
+fftw_complex* freqCavity::getF(){
+	if(gottenF==true) return F;
+	else{
+		F = fftw_alloc_complex(NUMPOINTS);
+		fillF(F, NUMPOINTS);
+		gottenF= true;
+		return F;
 	}
 }
 
@@ -297,22 +319,19 @@ std::string freqCavity::toString(){
 
 //wanna tell me if my code is insane/bad form? it works.
 
-
-
-
  int main(int argc, char* argv[]){
 
  	//////////////////////////create cavity system ///////////////////////
  	freqCavity cav;
- 	cav.addStacker(1,0.5855,0.0,0.0);
- 	//cav.addStacker(1,0.5950,-3.0370,0.0);
-    //cav.addStacker(1,0.5711, 2.4895,0.0);
- 	//cav.addStacker(1,0.5776,-0.6930,0.0);
- 	//cav.addStacker(9,0.5855,-2.2420,0.0);
- 	//cav.addStacker(9,0.5950,-3.0370,0.0);
- 	//cav.addStacker(9,0.5711, 2.4895,0.0);
- 	//cav.addStacker(9,0.5776,-0.6930,0.0);
- 	//std::cout << cav.toString()<<std::endl;
+ 	cav.addStacker(1,0.5855,-2.2420,0.0);
+ 	cav.addStacker(1,0.5950,-3.0370,0.0);
+    cav.addStacker(1,0.5711, 2.4895,0.0);
+ 	cav.addStacker(1,0.5776,-0.6930,0.0);
+ 	cav.addStacker(9,0.5855,-2.2420,0.0);
+ 	cav.addStacker(9,0.5950,-3.0370,0.0);
+ 	cav.addStacker(9,0.5711, 2.4895,0.0);
+ 	cav.addStacker(9,0.5776,-0.6930,0.0);
+ 	std::cout << cav.toString()<<std::endl;
 
  	//////////////////////// allocate and do the fftw ///////////////////////////
   	fftw_complex *fIn, *fOut, *bIn, *bOut;
@@ -333,6 +352,16 @@ std::string freqCavity::toString(){
  						 fOut,
  						 FFTW_FORWARD,
  						 FFTW_ESTIMATE);
+
+//test impulse response and the new fillF() function
+ 	cav.fillF(bIn,NUMPOINTS);
+ 	fftw_execute(b);
+ 	fftShift(bOut, bIn, NUMPOINTS);
+ 	toFile(bOut, NUMPOINTS, "test.txt");
+
+
+
+ 	/*
 
 ///////////Fill with zeros except 6 time reversed and conjugated spots//////
  	fftw_complex *wind;
@@ -377,11 +406,11 @@ std::string freqCavity::toString(){
 
  	//now wind holds the aligned IFFT'd multiplied function
  	toFile(wind, NUMPOINTS, "test.txt");
-
- 	fftw_free(wind);
+*/
+ //	fftw_free(wind);
  	fftw_free(fIn);
  	fftw_free(fOut);
- 	fftw_free(bIn);
+ 	//fftw_free(bIn);
  	fftw_free(bOut);
  	return 0;
  }
