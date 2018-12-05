@@ -4,13 +4,12 @@
  #include <string>
  #include <fftw3.h>
  #include <fstream>
-//number of points in FFTW vector. Needs to be power of two.
 
 
 
 /**
- * @brief Creates a linearly increasing array
- * @details modfies input array to have a linear increase from a to b, with a specified
+ * @brief Fills an array with linearly increasing values.
+ * @details Modfies input array to have a linear increase from a to b, with a specified
  * number of steps. 
  * 
  * @param a start value
@@ -25,14 +24,16 @@ void linspace(int a, int b, int points, double* x){
 		x++;
 	}
 }
+
 /**
  * @brief Mutliplies two fftw_complex arrays
- * @details Multiplies one complex fftw array by the other and stores in another array. All arrays must be the same length. 
+ * @details Multiplies one complex fftw array by the other and stores in a thrid array. Input arrays and output array must be the same length. 
+ * \note Uses pointer indexing for speed. The fftw_complex data type is 16-byte aligned which neccessitates increasing the double pointers by two each time.  
  * 
- * @param a first array to be multiplied
- * @param b second array to be multiplied
- * @param c output array
- * @param N length of the arrays
+ * @param a Array to be multiplied
+ * @param b Array to be multiplied
+ * @param c Array holding multiplied values
+ * @param N length of the arrays.
  */
 void vecMult(fftw_complex *a, fftw_complex *b, fftw_complex *c, int N){
 	double *aReal, *aImag, *bReal, *bImag, *cReal, *cImag;
@@ -58,10 +59,10 @@ void vecMult(fftw_complex *a, fftw_complex *b, fftw_complex *c, int N){
 }
 
 /**
- * @brief Complex conjuages of a fftw_complex array
- * @details [long description]
+ * @brief Complex conjugates a fftw_complex array
+ * @details modifies input array a to be the complex conjugate by iterating through and changing the sign of the imaginary part.
  * 
- * @param a array to be conjuagted
+ * @param a fftw_complex array to be conjuagted
  * @param N length of array.
  */
 void conj(fftw_complex *a, int N){
@@ -73,12 +74,14 @@ void conj(fftw_complex *a, int N){
 }
 
 /**
- * @brief Writes a fftw_complex array to file
- * @details Writes a fftw_complex array to file name passed in. The file is is CSV format with real, imaginary parts of the number. There are no header lines so far.
+ * @brief Writes a fftw_complex array to file.
+ * @details Writes a fftw_complex array to file name passed in. The file is is CSV format with real, imaginary parts of the number.
  * 
- * @param a pointer to head of fftw_complex array
+ * \todo Modify to write header lines to file. 
+ * 
+ * @param a fftw_complex array.
  * @param N length of array
- * @param filename name of file
+ * @param filename Desired name of file, as a string. 
  */
 void toFile(fftw_complex* a, int N, std::string filename ){
 	std::ofstream myfile (filename);
@@ -92,14 +95,15 @@ void toFile(fftw_complex* a, int N, std::string filename ){
 
 
 /**
- * @brief Re-aligns output fft array
- * @details Takes output fftw_complex array and aligns it from negative to positive frequency.
+ * @brief Swaps left and right half of input vector.
+ * @details Takes in array a and puts the first N/2 elements in the second half of b and vice-versa. Used for aligning output fft array from negative to positive frequencies. 
  * 
  *  \note  Written using pointers for speed. FFTW is 16-byte aligned and requires +=2 to go to the next element in the array. 
+ *  \bug Only works for n even. 
  * 
- * @param a Input array to be aligned
- * @param b Output aligned array
- * @param Length of array
+ * @param a Array to be swapped.
+ * @param b Swapped Array
+ * @param N Length of arrays
  */
 void fftShift(fftw_complex *a, fftw_complex *b, int N){
 	double *realIn, *imagIn, *imagOut, *realOut;
