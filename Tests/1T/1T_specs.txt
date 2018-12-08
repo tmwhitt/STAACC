@@ -2,4 +2,24 @@ This test case is a simple triangular cavity
 
 Cavity 1:
 Length = 1
-Phi = 0
+Phi = 0.0
+R = 0.50
+alpha = 0.0
+
+
+Files:
+Frequency Domain Code run on Dec 8, 2018
+
+files in format freqDomain<FFT VECTOR LENGTH>_<Sine Array Length>Sine.txt
+if <sine array length> is "Exact" then cpp sine function was used. 
+
+freqDomain1024_ExactSine.txt  
+freqDomain4096_ExactSine.txt
+freqDomain8192_ExactSine.txt
+freqDomain16384_ExactSine.txt
+
+freqDomain1024_4096Sine.txt  
+freqDomain4096_4096Sine.txt
+freqDomain8192_4096Sine.txt
+freqDomain16384_4096Sine.txt
+
