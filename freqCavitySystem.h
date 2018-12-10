@@ -1,4 +1,4 @@
-#include <math.h>
+ #include <math.h>
  #include <string>
  #include <complex>
  #include <fftw3.h>
@@ -8,6 +8,7 @@
 /**
  * \def NUMPOINTS
  * Number of points used for the FFTW vectors
+ * \todo Make this a malloc specified at runtime 
  */
 
  /**
@@ -20,15 +21,17 @@
  * Number of points to use for the sine LUT
  */
 
- #define NUMPOINTS 16384 
+ #define NUMPOINTS 2048
  #define PI  3.141592653589793 
- #define SINELENGTH 4096 
+ #define SINELENGTH 4096
 
 
 
 /**
  * \brief Frequency Domain cavity
  * \details A class that descibes a system of stacking cavities
+ * 
+ * \todo Add absorption alpha to do stuff. 
  * 
  */
 class freqCavitySystem{
@@ -43,7 +46,7 @@ private:
 	bool gottenF = false;                  /**< \brief boolean for if the stacker's F has been allocated and filled*/ 
 	static int totalfreqCavitySystem;      /**< \brief integer total number of stacker systems*/
 	static double x[NUMPOINTS];            /**< \brief static x vector shared by all cavities*/
-	static double sineLUT[SINELENGTH];     /**< \brief static sine lookup table vector shared by all cavities */
+	static double sLUT[SINELENGTH];        /**< \brief static sine lookup table vector shared by all cavities */
 public:
 	freqCavitySystem();
 	~freqCavitySystem();
@@ -52,18 +55,18 @@ public:
 	void fillFExact(fftw_complex *a, int n);
 	fftw_complex* getF();
 	std::string toString();
-	double* getX(){return x;}
+	double* getsLUT(){return sLUT;}
 	double bSine(double x);
 	double bCosine(double x);
 
 };
 double freqCavitySystem::x[] = {};
-double freqCavitySystem::sineLUT[] = {};
+double freqCavitySystem::sLUT[] = {};
 int freqCavitySystem::totalfreqCavitySystem=0;
 
 /**
  * @brief Default Constructor
- * @details Increments total number of stacker systems. If this is the first stacker system it initializes the x array and the sineLUT array. 
+ * @details Increments total number of stacker systems. If this is the first stacker system it initializes the x array and the sLUTarray. 
  */
 freqCavitySystem::freqCavitySystem(){
 	totalfreqCavitySystem++;
@@ -71,12 +74,12 @@ freqCavitySystem::freqCavitySystem(){
 		//std::cout<<" WRITING X AND SINE TABLE" <<std::endl;
 		linspace(0,1,NUMPOINTS,x);
 		double val = 0;
-		double step = PI/(2.0*(SINELENGTH-1.0));
-		double *sineLUTStart;
-		sineLUTStart = &sineLUT[0];
+		double step = 4*PI/(2.0*(SINELENGTH-1.0));
+		double *sLUTStart;
+		sLUTStart = &sLUT[0];
 		for(int i=0;i<SINELENGTH;i++){
-			*sineLUTStart = sin(val);
-			sineLUTStart++;
+			*sLUTStart = sin(val);
+			sLUTStart++;
 			val += step; 
 		}
 	}
@@ -207,19 +210,17 @@ void freqCavitySystem::fillF(fftw_complex *a, int n){
 		rBegin  = R.data();
 		deltaBegin = delta.data();
 		for(int i=1; i<totalNumber;i++){
-			std::cout<<"NO"<<std::endl;
 			aReal = &a[0][0];
 			aImag = &a[0][1];
 			xBegin = &x[0];
 
 			double r = std::sqrt(R[i]);
-			double deltaL,realTemp,imagTemp,aRealTemp,aImagTemp;
 			for(int j=0;j<n;j++){
-				deltaL = 2.0*PI*(*trBegin)*(*xBegin)+(*deltaBegin);
-				realTemp = (2.0*r-cos(deltaL)*(1.0+(*rBegin))/(1.0+(*rBegin)-2.0*r*cos(deltaL)));
-				imagTemp =  -1.0*bSine(deltaL)*(1.0-(*rBegin))/(1.0+(*rBegin)-2.0*r*cos(deltaL));
-				aRealTemp = *aReal;
-				aImagTemp = *aImag;
+				double deltaL = 2.0*PI*(Tr[i]*(*xBegin))+delta[i];
+				double realTemp = (2.0*r-bCosine(deltaL)*(1.0+R[i]))/(1.0+R[i]-2.0*r*bCosine(deltaL));
+				double imagTemp =  -1.0*bSine(deltaL)*(1.0-R[i])/(1.0+R[i]-2.0*r*bCosine(deltaL));
+				double aRealTemp = *aReal;
+				double aImagTemp = *aImag;
 
 				*aReal = aRealTemp*realTemp - aImagTemp*imagTemp;
 				*aImag = aRealTemp*imagTemp + aImagTemp*realTemp;
@@ -239,10 +240,10 @@ void freqCavitySystem::fillF(fftw_complex *a, int n){
  * @brief Adds a cavity to the cavity system. 
  * @details Increments the total number of cavities. Pushes R, Tr, delta, and alpha back on their respective vectors. Pushes back totalNumber on that vector.
  * 
- * @param Tr [description]
- * @param R [description]
- * @param delta [description]
- * @param alpha [description]
+ * @param Tr Cavity round trip multiple
+ * @param R Cavity (power) reflectivity
+ * @param delta Cavity Phase
+ * @param alpha Absorption
  */
 void freqCavitySystem::addCavity(double Tr, double R,  double delta, double alpha){
 	this -> R.push_back(R);
@@ -254,9 +255,9 @@ void freqCavitySystem::addCavity(double Tr, double R,  double delta, double alph
 }
 
 /**
- * @brief Returns (and possibly initializes and calculates) the transfer function of the cavity system. 
- * @details If the cavity system already has an initialized copy of F (given by gottenF==true) then the function returns that. Otherwise, it allocates F and calls fillF() to fill it. THen it sets gotten F true and returns F.
- * @return Local fftw_complex array of transfer function.
+ * \brief Returns (and possibly initializes and calculates) the transfer function of the cavity system. 
+ * \details If the cavity system already has an initialized copy of F (given by gottenF==true) then the function returns that. Otherwise, it allocates F and calls fillF() to fill it. THen it sets gotten F true and returns F.
+ * \return Local fftw_complex array of transfer function.
  * 
  * \warning The deconstructor will clear the memory of F if it is initialized. Clearing it from somewhere else will lead to a segfault and massive sadness. 
  */
@@ -289,39 +290,29 @@ std::string freqCavitySystem::toString(){
 
 /**
  * @brief Reutrns the sine(x) using lookup tables. 
- * @details Uses bit-manipulation to return the sine(x) from a lookup table. First folds x into 2pi, then folds into pi/2. Then, depending on where x falls, returns the proper value from the LUT. 
+ * @details Uses bit-manipulation to return the sine(x) from a lookup table. First folds x into 2pi, then casts to int (floors towards -inf), then bitmasks, 
  * 
- * \note error is lower here than in a corresponding 4x length table of the whole sine function and I am not sure why. 
- * \bug The first if statment is used to keep from overrunning the length of the lookup table. The effect of this is to return the value at the previous index. If you happen to lookup and x that fits perfectly at the end of the array, then you will get more error than if you lookup any other. The value of sine pretty constant here so it may be negligable. 
+ * \note Sinelength must be a power of two for this to work at all. 
+ * 
+ * \bug error is larger here than it should be with the testing I did in MATLAB, dont know why. 
  * 
  * @param x Value to be sine-d
  * @return sine(x)
  */
+
 double freqCavitySystem::bSine(double x){
-    int val1 = ((int) ((x/(2*PI))*SINELENGTH*4))& (4*SINELENGTH-1);
-    int val2 =  (val1) & (SINELENGTH-1);
-    
-    if(!(val2^(SINELENGTH-1))) val2--;
-
-    if       (val1 < SINELENGTH) return sineLUT[val2&(SINELENGTH-1)]; 
-    else if(val1 < 2*SINELENGTH) return sineLUT[SINELENGTH-1-val2&(SINELENGTH-1)];
-    else if(val1 < 3*SINELENGTH) return -1.0*sineLUT[val2&(SINELENGTH-1)];
-    else if(val1 < 4*SINELENGTH) return -1.0*sineLUT[SINELENGTH-1-val2&(SINELENGTH-1)];
-    
+    int index = ((int) ((x/(2*PI))*SINELENGTH))&(SINELENGTH-1);
+    return sLUT[index];
 }
-
 /**
  * @brief Reutrns the cos(x) using lookup tables. 
  * @details Calls bSine(PI/2-x)
  * @param x Value to be cosine-d
  * @return cos(x)
  */
+ 
 double freqCavitySystem::bCosine(double x){
 	return bSine(PI/2-x);
 }
-/*
-double freqCavitySystem::bSine(double x){
-    int index = ((int) ((x/(2*PI))*SINELENGTH))&(SINELENGTH-1);
-    return sineLUT[index];
-}
-*/
+
+ 
