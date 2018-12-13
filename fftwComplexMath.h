@@ -25,6 +25,27 @@ void linspace(int a, int b, int points, double* x){
 	}
 }
 
+
+/**
+ * @brief Fills an array with linearly increasing values.
+ * @details Modfies input array to have a linear increase from a to b, with a specified
+ * number of steps. 
+ * 
+ * @param a start value
+ * @param b end value
+ * @param points length of array
+ * @param x pointer to head of the array.
+ */
+void linspace(int a, int b, int points, fftw_complex* x){
+	double *head = &x[0][0];
+	double step = (b-a)/(points-1.0);
+
+	for(double val=a;val<=b;val+=step){
+		*head = val;
+		x++;x++;
+	}
+}
+
 /**
  * @brief Mutliplies two fftw_complex arrays
  * @details Multiplies one complex fftw array by the other and stores in a thrid array. Input arrays and output array must be the same length. 
@@ -77,7 +98,6 @@ void conj(fftw_complex *a, int N){
  * @brief Writes a fftw_complex array to file.
  * @details Writes a fftw_complex array to file name passed in. The file is is CSV format with real, imaginary parts of the number.
  * 
- * \todo Modify to write header lines to file. 
  * 
  * @param a fftw_complex array.
  * @param N length of array
@@ -86,8 +106,24 @@ void conj(fftw_complex *a, int N){
 void toFile(fftw_complex* a, int N, std::string filename ){
 	std::ofstream myfile (filename);
 	if(myfile.is_open()){
+		myfile << "Headerlines = 3" << "\n";
+		myfile << "Length  = " << N <<  "\n";
+		myfile << "Real, Imaginary" << "\n";
 		for(int i=0;i<N;i++){
 			myfile << a[i][0] << "," << a[i][1] << "\n";;
+		}
+	}else std::cout << "cannot open file"<< std::endl;
+	myfile.close();
+}
+
+void toFile(double* a, int N, std::string filename ){
+	std::ofstream myfile (filename);
+	if(myfile.is_open()){
+		myfile << "Headerlines = 3" << "\n";
+		myfile << "Length  = " << N <<  "\n";
+		myfile << "Real, Imaginary" << "\n";
+		for(int i=0;i<N;i++){
+			myfile << a[i] << "\n";;
 		}
 	}else std::cout << "cannot open file"<< std::endl;
 	myfile.close();
