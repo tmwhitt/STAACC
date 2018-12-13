@@ -18,8 +18,9 @@ using namespace std;
 #define POINTS_PER_THREAD 10 		// This number is the number of points to be tested and kept per thread in the random search
 #define ERROR_BOUND 0.0000001
 #define ERROR_SCALE 0.000000000000000001
+// #define ERROR_SCALE 0
 #define INITIAL_POINTS 10000000
-#define SIMPLEX_POINTS 10000000
+#define SIMPLEX_POINTS 100000
 
 bool sortError(const pair< vector<cavity>, double> &a,
 				const pair< vector<cavity>, double> &b){
@@ -64,9 +65,10 @@ int main (int argc, char *argv[]){
 	vector<int> lengths{1,1,1,1,9,9,9,9};
 
 	pair< vector<cavity>, double> cavSet(vector<cavity>(numCavs), 1.0);
-	pair< vector<cavity>, double> testCavSet(vector<cavity>(numCavs), 1.0);
-	pair< vector<cavity>, double> testCavSet2(vector<cavity>(numCavs), 1.0);
-	vector< pair< vector<cavity>, double> > simplex(numCavs*2+1, make_pair(vector<cavity>(numCavs), 1.0));
+	pair< vector<cavity>, double> reflCavSet(vector<cavity>(numCavs), 1.0);
+	pair< vector<cavity>, double> expandCavSet(vector<cavity>(numCavs), 1.0);
+	pair< vector<cavity>, double> contractCavSet(vector<cavity>(numCavs), 1.0);
+	vector< pair< vector<cavity>, double> > simplex(numCavs*2, make_pair(vector<cavity>(numCavs), 1.0));
 	vector<cavity> meanCavSet(numCavs);
 
 	vector< pair< vector<cavity>, double> > bestCavSet;
@@ -80,14 +82,26 @@ int main (int argc, char *argv[]){
 	// Set cavity lengths, they dont vary
 	for(i=0;i<numCavs;++i){
 		cavSet.first[i].length = lengths[i];
-		testCavSet.first[i].length = lengths[i];
-		testCavSet2.first[i].length = lengths[i];
+		reflCavSet.first[i].length = lengths[i];
+		expandCavSet.first[i].length = lengths[i];
+		contractCavSet.first[i].length = lengths[i];
 		meanCavSet[i].length = lengths[i];
 	}
+
+	cavSet.first[0].setPhase(0);
+	reflCavSet.first[0].setPhase(0);
+	expandCavSet.first[0].setPhase(0);
+	contractCavSet.first[0].setPhase(0);
+	meanCavSet[0].setPhase(0);
+
+	auto start_time = chrono::high_resolution_clock::now();
 
 	// Initial random scan to find starting point of program
 	#pragma omp parallel default(shared) firstprivate(k,i,cavSet,input,output,ideal_intensities)
 	{
+		#pragma omp single
+			cout << "Number of threads being used: " << omp_get_num_threads() << endl;
+
 		seed_seq seed1 {omp_get_thread_num()};
 		default_random_engine generator (seed1);
 		uniform_real_distribution<double> reflDist(reflMin,reflMax);
@@ -97,7 +111,8 @@ int main (int argc, char *argv[]){
 		vector< pair< vector<cavity>, double> > localBestCavSet(POINTS_PER_THREAD, make_pair(vector<cavity>(numCavs), 1.0));
 		#pragma omp for
 		for(k=0;k<INITIAL_POINTS;++k){
-			for(i=0;i<numCavs;++i){
+			localCavSet.first[0].setR(reflDist(generator));
+			for(i=1;i<numCavs;++i){
 				localCavSet.first[i].setR(reflDist(generator));
 				localCavSet.first[i].setPhase(phaseDist(generator));
 			}
@@ -125,6 +140,11 @@ int main (int argc, char *argv[]){
 	}
 	sort(bestCavSet.begin(), bestCavSet.end(), sortError);
 
+	auto end_time = chrono::high_resolution_clock::now();
+	auto duration = end_time - start_time;
+	cout << "Random point testing took " << chrono::duration_cast<chrono::seconds>(duration).count() << " seconds." << endl;
+
+
 	// cout << "Minimum error found in random is " << bestCavSet.back().second << endl;
 
 	// cout << "Values used for cavities are:" << endl;
@@ -133,7 +153,7 @@ int main (int argc, char *argv[]){
 	// }
 	// cout << endl;
 
-	cavityPropagation(bestCavSet.back().first,input,output);
+	// cavityPropagation(bestCavSet.back().first,input,output);
 	// cout << "Output intensities:" << endl;
 	// for(i=0;i<NUM_PULSES;++i){
 	// 	cout << output[i].getIntensity() << endl;
@@ -147,115 +167,192 @@ int main (int argc, char *argv[]){
 
 	// Set up initial simplex and sort it according to error
 	int numTests = bestCavSet.size();
-	for(k=0;k<numTests;++k){
-		double simplexSize = simplex.size();
-		double startDeviation = 1.05;
+	start_time = chrono::high_resolution_clock::now();
+
+	#pragma omp parallel for default(shared) firstprivate(i,j,simplex, ideal_intensities, input, output, meanCavSet, reflCavSet, expandCavSet, contractCavSet)
+		for(k=0;k<numTests;++k){
+			// cout << "Starting error: " << bestCavSet[k].second << endl;
 	
-		simplex[0] = bestCavSet[k];
-		for(i=1;i<simplexSize;++i){
-			simplex[i] = simplex[0];
-			if(i <= NUM_CAVS){
-				simplex[i].first[i-1].setR(simplex[i].first[i-1].getR() * startDeviation);
-			}
-			else{
-				simplex[i].first[i-NUM_CAVS-1].setPhase(simplex[i].first[i-NUM_CAVS-1].getPhase() * startDeviation);
-			}
-			simplex[i].second = evaluateError(ideal_intensities, input, output, simplex[i].first);
-		}
-		sort(simplex.begin(), simplex.end(), sortError);
+			bool shrinkNeeded = false;
+			double simplexSize = simplex.size();
+			double startDeviation = 1.05;
 	
-		double difference = 1;
-		int iteration = 0;
-		// This loop will execute until the minimum error is within the bound set
-		while((simplex.back().second > ERROR_BOUND) && iteration < SIMPLEX_POINTS && difference > ERROR_SCALE){
-			// First, calculate the mean cavity set
-			for(i=0;i<numCavs;++i){
-				meanR = 0;
-				meanP = 0;
-				for(j=1;j<simplexSize;++j){
-					meanR += simplex[j].first[i].getR();
-					meanP += simplex[j].first[i].getPhase();
-				}
-				meanR = meanR / (simplexSize - 1);
-				meanP = meanP / (simplexSize - 1);
-				meanCavSet[i].setR(meanR);
-				meanCavSet[i].setPhase(meanP);
-			}
-	
-			// Then, transformations
-			// First, we perform reflection, so find the reflected point
-			for(i=0;i<numCavs;++i){
-				testCavSet.first[i].setR(2 * meanCavSet[i].getR() - simplex[0].first[i].getR());
-				testCavSet.first[i].setPhase(2 * meanCavSet[i].getPhase() - simplex[0].first[i].getPhase());
-			}
-			testCavSet.second = evaluateError(ideal_intensities, input, output, testCavSet.first);
-	
-			if(testCavSet.second < simplex.back().second){
-				// Condition met for expansion, check it out
-				for(i=0;i<numCavs;++i){
-					testCavSet2.first[i].setR(2 * testCavSet.first[i].getR() - meanCavSet[i].getR());
-					testCavSet2.first[i].setPhase(2 * testCavSet.first[i].getPhase() - meanCavSet[i].getPhase());
-				}
-				testCavSet2.second = evaluateError(ideal_intensities, input, output, testCavSet2.first);
-	
-				if(testCavSet2.second < testCavSet.second){
-					simplex[0].swap(testCavSet2);
+			int reflect = 0;
+			int expand = 0;
+			int contract = 0;
+			int shrink = 0;
+		
+			simplex[0] = bestCavSet[k];
+			for(i=1;i<simplexSize;++i){
+				simplex[i] = simplex[0];
+				if(i <= NUM_CAVS){
+					simplex[i].first[i-1].setR(simplex[i].first[i-1].getR() * startDeviation);
 				}
 				else{
-					simplex[0].swap(testCavSet);
+					simplex[i].first[i-NUM_CAVS].setPhase(simplex[i].first[i-NUM_CAVS].getPhase() * startDeviation);
 				}
-	
+				simplex[i].second = evaluateError(ideal_intensities, input, output, simplex[i].first);
 			}
-			else if(testCavSet.second < simplex.front().second){
-				// Condition met for reflection only, simply set it
-				simplex[0].swap(testCavSet);
-			}
-			else{
-				// Condition met for contraction or shrink, do it
+			sort(simplex.begin(), simplex.end(), sortError);
+		
+			double difference = 1;
+			int iteration = 0;
+			// This loop will execute until the minimum error is within the bound set
+			while((simplex.back().second > ERROR_BOUND) && iteration < SIMPLEX_POINTS && difference > ERROR_SCALE){
+				// First, calculate the mean cavity set
 				for(i=0;i<numCavs;++i){
-					testCavSet2.first[i].setR((simplex[0].first[i].getR() + meanCavSet[i].getR())/2.0);
-					testCavSet2.first[i].setPhase((simplex[0].first[i].getPhase() + meanCavSet[i].getPhase())/2.0);
+					meanR = 0;
+					meanP = 0;
+					for(j=1;j<simplexSize;++j){
+						meanR += simplex[j].first[i].getR();
+						meanP += simplex[j].first[i].getPhase();
+					}
+					meanR = meanR / (simplexSize - 1);
+					meanP = meanP / (simplexSize - 1);
+					meanCavSet[i].setR(meanR);
+					meanCavSet[i].setPhase(meanP);
 				}
-				testCavSet2.second = evaluateError(ideal_intensities, input, output, testCavSet2.first);
-	
-				if(testCavSet2.second < simplex.front().second){
-					simplex[0].swap(testCavSet2);
+		
+				// Then, transformations
+				// First, we perform reflection, so find the reflected point
+				for(i=0;i<numCavs;++i){
+					reflCavSet.first[i].setR(2 * meanCavSet[i].getR() - simplex[0].first[i].getR());
+					reflCavSet.first[i].setPhase(2 * meanCavSet[i].getPhase() - simplex[0].first[i].getPhase());
+				}
+				reflCavSet.second = evaluateError(ideal_intensities, input, output, reflCavSet.first);
+		
+				if(reflCavSet.second < simplex.back().second){
+					// Condition met for expansion, check it out
+					for(i=0;i<numCavs;++i){
+						expandCavSet.first[i].setR(2 * reflCavSet.first[i].getR() - meanCavSet[i].getR());
+						expandCavSet.first[i].setPhase(2 * reflCavSet.first[i].getPhase() - meanCavSet[i].getPhase());
+					}
+					expandCavSet.second = evaluateError(ideal_intensities, input, output, expandCavSet.first);
+		
+					if(expandCavSet.second < reflCavSet.second){
+						simplex[0].swap(expandCavSet);
+						expand++;
+						// cout << "Expansion used" << endl;
+					}
+					else{
+						simplex[0].swap(reflCavSet);
+						reflect++;
+						// cout << "Reflection used" << endl;
+					}
+		
+				}
+				else if(reflCavSet.second < simplex[1].second){
+					// Condition met for reflection only, simply set it
+					simplex[0].swap(reflCavSet);
+					reflect++;
+					// cout << "Reflection used" << endl;
 				}
 				else{
-					// Condition met for shrinking, unfortunately. It's gonna be a doozey
-					for(i=0;i<simplexSize-1;++i){
-						for(j=0;j<numCavs;++j){
-							simplex[i].first[j].setR((simplex[i].first[j].getR() + simplex.back().first[j].getR())/2.0);
-							simplex[i].first[j].setPhase((simplex[i].first[j].getPhase() + simplex.back().first[j].getPhase())/2.0);
+					if(reflCavSet.second < simplex[0].second){
+						for(i=0;i<numCavs;++i){
+							contractCavSet.first[i].setR((reflCavSet.first[i].getR() + meanCavSet[i].getR())/2.0);
+							contractCavSet.first[i].setPhase((reflCavSet.first[i].getPhase() + meanCavSet[i].getPhase())/2.0);
+						}
+						contractCavSet.second = evaluateError(ideal_intensities, input, output, contractCavSet.first);
+	
+						if(contractCavSet.second <=	 reflCavSet.second){
+							simplex[0].swap(contractCavSet);
+							contract++;
+							// cout << "Contraction used" << endl;
+						}
+						else{
+							shrinkNeeded = true;
 						}
 					}
+					else{
+						for(i=0;i<numCavs;++i){
+							contractCavSet.first[i].setR((simplex[0].first[i].getR() + meanCavSet[i].getR())/2.0);
+							contractCavSet.first[i].setPhase((simplex[0].first[i].getPhase() + meanCavSet[i].getPhase())/2.0);
+						}
+						contractCavSet.second = evaluateError(ideal_intensities, input, output, contractCavSet.first);
+	
+						if(contractCavSet.second <=	 simplex[0].second){
+							simplex[0].swap(contractCavSet);
+							contract++;
+							// cout << "Contraction used" << endl;
+						}
+						else{
+							shrinkNeeded = true;
+						}
+					}
+					if(shrinkNeeded){
+						// Condition met for shrinking, unfortunately. It's gonna be a doozey
+						for(i=0;i<simplexSize-1;++i){
+							for(j=0;j<numCavs;++j){
+								simplex[i].first[j].setR((simplex[i].first[j].getR() + simplex.back().first[j].getR())/2.0);
+								simplex[i].first[j].setPhase((simplex[i].first[j].getPhase() + simplex.back().first[j].getPhase())/2.0);
+							}
+							simplex[i].second = evaluateError(ideal_intensities, input, output, simplex[i].first);
+						}
+						shrink++;
+						shrinkNeeded = false;
+						// cout << "Shrink used" << endl;
+					}
 				}
+		
+				// Lastly, re-sort with the transformed node and go again
+				sort(simplex.begin(), simplex.end(), sortError);
 	
+				// cout << "Simplex after transformation:" << endl;
+				// for(i=0;i<simplexSize;++i){
+				// 	cout << "Cavity Set " << i << ": " << "Error of " << simplex[i].second << endl;
+				// 	// for(j=0;j<numCavs;++j){
+				// 	// 	cout << "Cav " << j << ": R=" << simplex[i].first[j].getR() << ", phi=" << simplex[i].first[j].getPhase() << endl;
+				// 	// }
+				// 	cout << endl;
+				// }
+				// cout << endl;
+	
+				++iteration;
+				// if(iteration % 10000 == 0){
+				// 	cout << difference << endl;
+				// }
+				difference = simplex.front().second - simplex.back().second;
+			}
+			cout << "Ended on iteration " << iteration << endl;
+			cout << "Final error found is " << simplex.back().second << endl;
+	
+			if(difference <= ERROR_SCALE){
+				cout << "Terminated due to all points being almost the same" << endl;
+			}
+			else if(iteration >= SIMPLEX_POINTS){
+				cout << "Terminated due to timeout" << endl;
+			}
+			else{
+				cout << "Terminated due to good enough point" << endl;
 			}
 	
-			// Lastly, re-sort with the transformed node and go again
-			sort(simplex.begin(), simplex.end(), sortError);
-			++iteration;
-			if(iteration % 10000 == 0){
-				cout << difference << endl;
+			cout << "Number of operations:" << endl;
+			cout << "Reflections: " << reflect << endl;
+			cout << "Expansions: " << expand << endl;
+			cout << "Contractions: " << contract << endl;
+			cout << "Shrinks: " << shrink << endl;
+	
+			cout << "Values used for cavities are:" << endl;
+			for(i=0;i<numCavs;++i){
+				cout << "R=" << simplex.back().first[i].getR() << ", phi=" << simplex.back().first[i].getPhase() << endl;
 			}
-			difference = simplex.front().second - simplex.back().second;
+		
+			cout << endl;
+			
+			// cavityPropagation(simplex.back().first,input,output);
+			// cout << "Output intensities:" << endl;
+			// for(i=0;i<NUM_PULSES;++i){
+			// 	cout << output[i].getIntensity() << endl;
+			// }
+			// cout << endl;
 		}
-		cout << "Ended on iteration " << iteration << endl;
-		cout << "Final error found is " << simplex.back().second << endl << endl;
-	
-		// cout << "Values used for cavities are:" << endl;
-		// for(i=0;i<numCavs;++i){
-		// 	cout << "R=" << simplex.back().first[i].getR() << ", phi=" << simplex.back().first[i].getPhase() << endl;
-		// }
-	
-		// cavityPropagation(simplex.back().first,input,output);
-		// cout << "Output intensities:" << endl;
-		// for(i=0;i<NUM_PULSES;++i){
-		// 	cout << output[i].getIntensity() << endl;
-		// }
-		// cout << endl;
-	}
+
+	end_time = chrono::high_resolution_clock::now();
+	duration = end_time - start_time;
+	cout << "Simplexing all points took " << chrono::duration_cast<chrono::seconds>(duration).count() << " seconds." << endl;
+
+
 	outfile.close();
 	return 0;
 }

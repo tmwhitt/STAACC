@@ -20,9 +20,22 @@ struct cavity{
 		phaseImag = sin(p);
 	}
 
-	void setCavPhase(double p){
+	void setPhase(double p){
 		phaseReal = cos(p);
 		phaseImag = sin(p);
+	}
+
+	double getPhase(){
+		return atan2(phaseImag,phaseReal);
+	}
+
+	void setR(double r){
+		refl = sqrt(r);
+		trans = sqrt(1-r);
+	}
+
+	double getR(){
+		return refl*refl;
 	}
 };
 
@@ -34,6 +47,16 @@ struct pulse{
 	pulse(double r, double i) : real(r), imag(i) {}
 	pulse(double r) : real(r) {}
 	pulse() : real(0), imag(0) {}
+
+	double getIntensity(){
+		return real*real+imag*imag;
+	}
+
+	void setPhase(double p){
+		double temp = sqrt(real*real+imag*imag);
+		real = cos(p)*temp;
+		imag = sin(p)*temp;
+	}
 };
 
 // Size of input pulse train must = size of output pulse train
@@ -47,8 +70,8 @@ void cavityPropagation(	const vector<cavity> &cavSet, const vector<pulse> &input
 	int numPulses = input.size();
 	double temp;
 
-	vector< vector<pulse> > Ecav(numCavs, vector<pulse>(numPulses + numCavs));
-	vector< vector<pulse> > Eout(numCavs, vector<pulse>(numPulses + numCavs));
+	vector< vector<pulse> > Ecav(numCavs, vector<pulse>(numPulses));
+	vector< vector<pulse> > Eout(numCavs, vector<pulse>(numPulses));
 
 	// First pulse hits all the cavities, and loads them up
 
