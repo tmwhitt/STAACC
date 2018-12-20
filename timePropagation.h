@@ -3,13 +3,18 @@
 
 using namespace std;
 
+/**
+ * \brief Time domain cavity class
+ * \details A struct that fully describes a cavity in the time domain
+ * 
+ */
 struct cavity{
 
-	int length;
-	double refl;
-	double trans;
-	double phaseReal;
-	double phaseImag;
+	int length;				/**< \brief Length of cavity in pulse separations.  */
+	double refl;			/**< \brief Field reflectivity of cavity beamsplitter.  */
+	double trans;			/**< \brief Field transmittivity of cavity beamsplitter.  */
+	double phaseReal;		/**< \brief Real portion of cavity phase.  */
+	double phaseImag;		/**< \brief Imaginary portion of cavity phase.  */
 
 	cavity() : length(0), refl(1.0), phaseReal(0), phaseImag(0) {}
 
@@ -39,10 +44,15 @@ struct cavity{
 	}
 };
 
+/**
+ * \brief Optical pulse struct
+ * \details A struct that describes an optical pulse by storing its electric field values
+ * 
+ */
 struct pulse{
 
-	double real;
-	double imag;
+	double real;		/**< \brief Real portion of pulse electric field.  */
+	double imag;		/**< \brief Imaginary portion of pulse electric field.  */
 
 	pulse(double r, double i) : real(r), imag(i) {}
 	pulse(double r) : real(r) {}
@@ -57,11 +67,20 @@ struct pulse{
 		real = cos(p)*temp;
 		imag = sin(p)*temp;
 	}
+
+	double getPhase(){
+		return atan2(imag,real);
+	}
 };
 
-// Size of input pulse train must = size of output pulse train
-// Size of input pulse train must also be larger than the number of cavities, cause it would be a mess of if statements otherwise
-// Fill it with 0's if you have to for impulse response.
+/**
+ * @brief [Propagation function in time domain]
+ * @details [Propagates the pulses through a cavity set by calculating the interference of electric fields at each beamsplitter]
+ * 
+ * @param cavSet [Vector of cavities that describes the stacker system]
+ * @param input [Vector of pulses that will be input to the cavities, the number of output pulses calculated is the size of this vector]
+ * @param output [Vector of pulses that will be overwritten with the output train, do not store important information in this vector]
+ */
 void cavityPropagation(	const vector<cavity> &cavSet, const vector<pulse> &input, 
 						vector<pulse> &output){
 
